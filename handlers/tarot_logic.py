@@ -14,9 +14,10 @@ from utils.helpers import get_zodiac_sign
 from utils.personas import PERSONAS
 from utils.prompts import get_system_prompt, make_horoscope_prompt, make_dream_prompt, make_tarot_prompt
 from utils.sender import send_text, send_photo, send_media_group, delete_message, send_loading_animation
+from utils.tarot_layouts import TAROT_LAYOUTS_INFO
 
 # Клавиатуры
-from keyboards.inline_kb import get_tarot_menu_keyboard, get_tarot_request_keyboard, get_dream_start_keyboard
+from keyboards.inline_kb import get_tarot_menu_keyboard, get_tarot_request_keyboard, get_dream_start_keyboard, btn_back_to_main_menu, get_tarot_intro_keyboard
 from keyboards.reply_kb import get_cancel_reply_keyboard, get_main_menu_keyboard
 from config import BOT_ADMIN_IDS
 
@@ -69,6 +70,22 @@ async def reply_cancel_handler(message: Message, state: FSMContext, bot: Bot):
         "🏠 Действие отменено. Вы в главном меню.",
         reply_markup=get_main_menu_keyboard(is_admin)
     )
+
+
+# ==========================
+# 🔄 НАЗАД К МЕНЮ РАСКЛАДОВ
+# ==========================
+@tarot_router.callback_query(F.data == "back_to_tarot_menu")
+async def back_to_tarot_menu_handler(callback: CallbackQuery, bot: Bot):
+    await send_text(
+        bot,
+        callback.message.chat.id,
+        "🃏 <b>Выберите тип расклада:</b>\n\n"
+        "<i>Карта дня — бесплатно раз в сутки.\n"
+        "Остальные расклады — за карму.</i>",
+        reply_markup=get_tarot_menu_keyboard()
+    )
+    await callback.answer()
 
 
 # ==========================
@@ -237,8 +254,8 @@ async def tarot_menu_handler(message: Message, bot: Bot):
 
 
 
-# --- 1. Выбор расклада (Шаг 1) ---
-@tarot_router.callback_query(F.data.startswith("tarot_") & (F.data != "tarot_enter_query"))
+# --- 1. Выбор расклада ---
+@tarot_router.callback_query(F.data.startswith("tarot_") & (F.data != "tarot_enter_query") & (F.data != "back_to_main_menu"))
 async def tarot_selection_handler(callback: CallbackQuery, state: FSMContext, db_pool: asyncpg.Pool, bot: Bot):
     layout_type = callback.data
     user_id = callback.from_user.id
@@ -247,8 +264,13 @@ async def tarot_selection_handler(callback: CallbackQuery, state: FSMContext, db
         "tarot_daily": ("price_daily_tarot", "Карта дня", 1),
         "tarot_one_card": ("price_tarot_one_card", "Одиночная карта", 1),
         "tarot_ppf": ("price_tarot_ppf", "Прошлое, Настоящее, Будущее", 3),
-        "tarot_celtic": ("price_tarot_celtic_cross", "Кельтский крест", 10),
-        "tarot_intro": ("price_tarot_introduce", "Знакомство с колодой", 3)
+        "tarot_celtic_cross": ("price_tarot_celtic_cross", "Кельтский крест", 10),
+        "tarot_intro": ("price_tarot_introduce", "Знакомство с колодой", 3),
+        "tarot_transformation": ("price_tarot_transformation", "Личная трансформация", 5),
+        "tarot_life_tree": ("price_tarot_life_tree", "Дерево Жизни", 10),
+        "tarot_wheel_fate": ("price_tarot_wheel_fate", "Колесо судьбы", 7),
+        "tarot_chakra": ("price_tarot_chakra", "Семь чакр", 7),
+        "tarot_monthly": ("price_tarot_monthly", "Карта месяца", 1)
     }
 
     config = configs.get(layout_type)
@@ -318,52 +340,105 @@ async def tarot_selection_handler(callback: CallbackQuery, state: FSMContext, db
         return
 
     # ==========================================
-    # СЦЕНАРИЙ 3: ОБЫЧНЫЕ ПЛАТНЫЕ РАСКЛАДЫ (Платно, Ввод вопроса)
+    # СЦЕНАРИЙ 3: ОБЫЧНЫЕ РАСКЛАДЫ - Показываем описание
     # ==========================================
+    # Проверяем, есть ли информация о раскладе в файле с описаниями
+    layout_info = TAROT_LAYOUTS_INFO.get(layout_type)
+    if layout_info:
+        # Получаем цену расклада из настроек
+        settings_repo = SettingsRepo(db_pool)
+        setting = await settings_repo.get_setting(layout_info["cost"] if layout_info["cost"] else f"price_{layout_type}")
+        if setting:
+            price = int(setting["value"]) if setting["value"].isdigit() else 0
+            if layout_info["cost"] is None:  # Если стоимость была None, устанавливаем реальную цену
+                cost_text = f"{price} ✨"
+            else:
+                cost_text = layout_info["cost"]
+        else:
+            cost_text = "0 ✨"
 
-    # 1. Проверка баланса
-    price = await check_balance_and_get_price(user_id, price_key, db_pool, bot, callback.message.chat.id)
-    if price == -1:
-        await callback.answer()
-        return
+        # Формируем полное описание с ценой в новом формате
+        # Разделяем название и описание
+        name_part = layout_info["name"]  # Это уже содержит эмодзи и название
+        description_part = layout_info["description"]
 
-    # 2. Сохраняем данные в FSM и просим вопрос
-    await state.update_data(
-        layout_type=layout_type,
-        layout_name=layout_name,
-        cards_count=cards_count,
-        price=price
-    )
+        full_description = f"<b>{name_part}</b>\n\n<i>{description_part}</i>\n\n<b>Стоимость:</b> {cost_text}"
 
-    await send_text(
-        bot,
-        callback.message.chat.id,
-        f"🔮 Вы выбрали расклад: <b>{layout_name}</b>\n"
-        f"Стоимость: {price} ✨\n\n"
-        "Нажмите кнопку ниже, чтобы сформулировать свой вопрос к картам.",
-        reply_markup=get_tarot_request_keyboard()
-    )
+        # Сохраняем данные расклада в FSM
+        await state.update_data(
+            layout_type=layout_type,
+            layout_name=layout_info["name"],
+            price=int(setting["value"]) if setting and setting["value"].isdigit() else 0
+        )
+
+        # Для расклада "Знакомство с колодой" используем особую клавиатуру
+        if layout_type == "tarot_intro":
+            await send_text(
+                bot,
+                callback.message.chat.id,
+                full_description,
+                reply_markup=get_tarot_intro_keyboard()
+            )
+        else:
+            await send_text(
+                bot,
+                callback.message.chat.id,
+                full_description,
+                reply_markup=get_tarot_request_keyboard()
+            )
+    else:
+        # Если информации об этом раскладе нет в TAROT_LAYOUTS_INFO, используем старую логику
+        price = await check_balance_and_get_price(user_id, price_key, db_pool, bot, callback.message.chat.id)
+        if price == -1:
+            await callback.answer()
+            return
+
+        # Сохраняем данные в FSM и просим вопрос
+        await state.update_data(
+            layout_type=layout_type,
+            layout_name=layout_name,
+            cards_count=cards_count,
+            price=price
+        )
+
+        await send_text(
+            bot,
+            callback.message.chat.id,
+            f"🔮 Вы выбрали расклад: <b>{layout_name}</b>\n"
+            f"Стоимость: {price} ✨\n\n"
+            "Нажмите кнопку ниже, чтобы сформулировать свой вопрос к картам.",
+            reply_markup=get_tarot_request_keyboard()
+        )
     await callback.answer()
 
 
-# --- 2. Нажатие "Ввести запрос" (Шаг 2) ---
+# --- 3. Нажатие "Ввести запрос" (Шаг 3) ---
 @tarot_router.callback_query(F.data == "tarot_enter_query")
 async def tarot_start_input(callback: CallbackQuery, state: FSMContext, bot: Bot):
     """
     Обработчик кнопки 'Ввести запрос'.
     Переводит бота в режим ожидания текста и показывает кнопку Отмена.
     """
+    data = await state.get_data()
+    if not data:
+        await send_text(bot, callback.message.chat.id, "⚠️ Ошибка данных. Попробуйте выбрать расклад заново.",
+                        reply_markup=get_main_menu_keyboard())
+        await state.clear()
+        return
+
     await send_text(
         bot,
         callback.message.chat.id,
-        "✍️ <b>Напишите ваш вопрос или опишите ситуацию одним сообщением:</b>",
+        f"✍️ <b>Напишите ваш вопрос или опишите ситуацию одним сообщением:</b>\n\n"
+        f"Выбранный расклад: <b>{data['layout_name']}</b>\n"
+        f"Стоимость: {data['price']} ✨",
         reply_markup=get_cancel_reply_keyboard()
     )
     await state.set_state(TarotStates.waiting_for_question)
     await callback.answer()
 
 
-# --- 3. Получение вопроса и запуск (Шаг 3) ---
+# --- 4. Получение вопроса и запуск (Шаг 4) ---
 @tarot_router.message(TarotStates.waiting_for_question)
 async def tarot_process_handler(message: Message, state: FSMContext, db_pool: asyncpg.Pool, bot: Bot):
     user_id = message.from_user.id
@@ -379,13 +454,42 @@ async def tarot_process_handler(message: Message, state: FSMContext, db_pool: as
 
     await state.clear()
 
+    # Получаем количество карт для выбранного расклада
+    layout_configs = {
+        "tarot_daily": 1,
+        "tarot_monthly": 1,
+        "tarot_one_card": 1,
+        "tarot_ppf": 3,
+        "tarot_celtic_cross": 10,
+        "tarot_intro": 3,
+        "tarot_transformation": 5,
+        "tarot_life_tree": 10,
+        "tarot_wheel_fate": 7,
+        "tarot_chakra": 7
+    }
+    cards_count = layout_configs.get(data['layout_type'], 1)
+
     # Запускаем процесс
     await process_tarot_reading(
         user_id, message.chat.id,
-        data['layout_type'], data['layout_name'], data['cards_count'],
+        data['layout_type'], data['layout_name'], cards_count,
         question, data['price'],
         db_pool, bot
     )
+
+
+# --- 5. Назад к главному меню ---
+@tarot_router.callback_query(F.data == "back_to_main_menu")
+async def back_to_main_menu_handler(callback: CallbackQuery, state: FSMContext, bot: Bot):
+    await state.clear()
+    is_admin = callback.from_user.id in BOT_ADMIN_IDS
+    await send_text(
+        bot,
+        callback.message.chat.id,
+        "🏠 Вы возвращаетесь в главное меню.",
+        reply_markup=get_main_menu_keyboard(is_admin)
+    )
+    await callback.answer()
 
 
 # --- 4. ЯДРО ЛОГИКИ РАСКЛАДА ---
@@ -420,10 +524,28 @@ async def process_tarot_reading(
 
     # 2. Подготовка информации для ИИ (БЕЗ отправки фото)
     cards_info_for_llm = []
+
+    # Определение позиций для разных раскладов
     positions_ppf = ["Прошлое", "Настоящее", "Будущее"]
     positions_celtic = [
         "Текущая ситуация", "Препятствие/Вызов", "Основа (Прошлое)", "Недавнее прошлое",
         "Возможный исход (Лучшее)", "Ближайшее будущее", "Сам кверент", "Окружение", "Надежды/Страхи", "Итог"
+    ]
+    positions_transformation = [
+        "Текущее Я", "Блокировки", "Скрытые ресурсы", "Направление изменений", "Результат"
+    ]
+    positions_life_tree = [
+        "Корни (прошлое)", "Искусство и творчество", "Общение", "Семья и дом",
+        "Самооценка", "Гармония и баланс", "Путь жизни",
+        "Влияние духовного", "Интеграция", "Реализация"
+    ]
+    positions_wheel_fate = [
+        "Прошлое", "Настоящее", "Будущее", "Внутренний конфликт",
+        "Внешние факторы", "Путь", "Результат"
+    ]
+    positions_chakra = [
+        "Корневая чакра", "Сакральная чакра", "Солнечное сплетение",
+        "Сердечная чакра", "Горловая чакра", "Чакра третьего глаза", "Венечная чакра"
     ]
 
     for i, card in enumerate(cards):
@@ -432,8 +554,18 @@ async def process_tarot_reading(
         # Именования позиций для конкретных раскладов
         if layout_type == "tarot_ppf" and i < 3:
             position_name = positions_ppf[i]
-        elif layout_type == "tarot_celtic" and i < 10:
+        elif layout_type == "tarot_celtic_cross" and i < 10:
             position_name = positions_celtic[i]
+        elif layout_type == "tarot_transformation" and i < 5:
+            position_name = positions_transformation[i]
+        elif layout_type == "tarot_life_tree" and i < 10:
+            position_name = positions_life_tree[i]
+        elif layout_type == "tarot_wheel_fate" and i < 7:
+            position_name = positions_wheel_fate[i]
+        elif layout_type == "tarot_chakra" and i < 7:
+            position_name = positions_chakra[i]
+        elif layout_type == "tarot_monthly":
+            position_name = "Тема Месяца"
 
         cards_info_for_llm.append(f"{position_name}: {card['ru']} ({card.get('arcana', '')})")
 

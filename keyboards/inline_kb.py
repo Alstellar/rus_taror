@@ -15,6 +15,21 @@ def btn_back_profile() -> InlineKeyboardButton:
     return InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_profile")
 
 
+def btn_back_to_main_menu() -> InlineKeyboardButton:
+    return InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_main_menu")
+
+
+def get_tarot_intro_keyboard() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="🤝 Познакомиться с колодой", callback_data="tarot_enter_query")
+    kb.button(text="🔙 Назад", callback_data="back_to_tarot_menu")
+    kb.button(text="🏠 В главное меню", callback_data="nav_home")
+
+    # Выстраиваем кнопки в одну строку
+    kb.adjust(3)
+    return kb.as_markup()
+
+
 # --- Профиль ---
 def get_profile_keyboard() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
@@ -65,15 +80,25 @@ def get_personas_keyboard(current_persona: str) -> InlineKeyboardMarkup:
 
 def get_tarot_menu_keyboard() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
+
+    # Первая строка: Карта дня и Знакомство с колодой
     kb.button(text="🃏 Карта дня (Бесплатно)", callback_data="tarot_daily")
-    kb.button(text="🔍 Одиночная карта", callback_data="tarot_one_card")
-    kb.button(text="🔮 Три карты (П-Н-Б)", callback_data="tarot_ppf")
-    kb.button(text="✝️ Кельтский крест", callback_data="tarot_celtic")
     kb.button(text="🤝 Знакомство с колодой", callback_data="tarot_intro")
 
-    # Выстраиваем расклады по 1 в ряд
-    kb.adjust(1)
+    # Остальные строки по 2 кнопки
+    kb.button(text="📅 Карта месяца", callback_data="tarot_monthly")
+    kb.button(text="🔍 Одиночная карта", callback_data="tarot_one_card")
+    kb.button(text="🔮 Три карты (П-Н-Б)", callback_data="tarot_ppf")
+    kb.button(text="💫 Личная трансформация", callback_data="tarot_transformation")
+    kb.button(text="🔗 Семь чакр", callback_data="tarot_chakra")
+    kb.button(text="🎡 Колесо судьбы", callback_data="tarot_wheel_fate")
+    kb.button(text="🌲 Дерево Жизни", callback_data="tarot_life_tree")
+    kb.button(text="✝️ Кельтский крест", callback_data="tarot_celtic_cross")
 
+    # Выстраиваем расклады по 2 в ряд
+    kb.adjust(2)
+
+    # Последняя строка: Только Главное меню
     kb.row(btn_home())
     return kb.as_markup()
 
@@ -83,7 +108,8 @@ def get_tarot_request_keyboard() -> InlineKeyboardMarkup:
     """Кнопка для начала ввода вопроса к картам."""
     kb = InlineKeyboardBuilder()
     kb.button(text="🔮 Ввести запрос", callback_data="tarot_enter_query")
-    kb.adjust(1)
+    # Добавляем кнопки "Назад" и "Главное меню" в одну строку
+    kb.row(InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_tarot_menu"))
     kb.row(btn_home())
     return kb.as_markup()
 
