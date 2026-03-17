@@ -45,7 +45,6 @@ async def daily_bonus_task(bot: Bot, pool: asyncpg.Pool):
         if not user: continue
 
         user_data = dict(user)
-        current_karma = user_data['karma']
         add_karma = 0
 
         if is_premium(user_data):
@@ -64,11 +63,10 @@ async def daily_bonus_task(bot: Bot, pool: asyncpg.Pool):
             pass
 
         if add_karma > 0:
-            new_karma = current_karma + add_karma
-            await user_repo.update_user(user_id, karma=new_karma)
-            await payment_repo.add_internal_transaction(user_id, "daily_bonus", add_karma)
-            total_bonus += add_karma
-            count_users += 1
+            new_karma = await payment_repo.apply_karma_transaction(user_id, "daily_bonus", add_karma)
+            if new_karma is not None:
+                total_bonus += add_karma
+                count_users += 1
 
         await asyncio.sleep(0.05)
 

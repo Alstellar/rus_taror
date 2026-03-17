@@ -107,9 +107,15 @@ class YooKassaService:
             except (IndexError, ValueError):
                 karma_add = 0
 
-            new_karma = user_data["karma"] + karma_add
-
-            await user_repo.update_user(user_id, karma=new_karma)
+            payment_repo = PaymentRepo(self.pool)
+            new_karma = await payment_repo.apply_karma_transaction(
+                user_id=user_id,
+                operation_type="yookassa_karma_purchase",
+                amount=karma_add
+            )
+            if new_karma is None:
+                logger.error(f"Не удалось начислить карму пользователю {user_id} после оплаты {payload}.")
+                return
 
             # Уведомление пользователю
             await send_text(
@@ -140,9 +146,33 @@ class YooKassaService:
 
             # Бонус за покупку подписки
             bonus = 100
-            new_karma = user_data["karma"] + bonus
+            async with self.pool.acquire() as conn:
+                async with conn.transaction():
+                    new_karma = await conn.fetchval(
+                        """
+                        UPDATE users
+                        SET premium_date = $2,
+                            karma = karma + $3
+                        WHERE user_id = $1
+                        RETURNING karma;
+                        """,
+                        user_id,
+                        new_date,
+                        bonus,
+                    )
+                    if new_karma is None:
+                        logger.error(f"Не удалось обновить premium/karma пользователю {user_id} после оплаты {payload}.")
+                        return
 
-            await user_repo.update_user(user_id, premium_date=new_date, karma=new_karma)
+                    await conn.execute(
+                        """
+                        INSERT INTO payments_internal (user_id, type_operation, amount)
+                        VALUES ($1, $2, $3);
+                        """,
+                        user_id,
+                        "yookassa_premium_bonus",
+                        bonus,
+                    )
 
             fmt_date = new_date.strftime("%d.%m.%Y")
 

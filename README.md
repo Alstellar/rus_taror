@@ -22,7 +22,9 @@ cp .env.example .env
 
 4. Заполните `.env` своими данными:
    - `BOT_TOKEN` - токен бота от [@BotFather](https://t.me/BotFather)
-   - `SAMBANOVA_API_KEY` - API-ключ для SambaNova
+   - `OPENROUTER_API_KEY` - API-ключ для OpenRouter
+   - `OPENROUTER_MODEL` - основная модель в формате `provider/model` (например, `meta-llama/llama-4-maverick`)
+   - `OPENROUTER_FALLBACK_MODELS` - запасные модели через запятую (если основная недоступна)
    - `DB_PASSWORD` - пароль от базы данных PostgreSQL
    - Прочие настройки по необходимости
 
@@ -43,7 +45,7 @@ python main.py
 
 ## Особенности
 
-- Интеграция с SambaNova для генерации интерпретации карт Таро
+- Интеграция с OpenRouter для генерации интерпретации карт Таро
 - Автоматические рассылки и напоминания
 - Поддержка гороскопов и сонника
 - Встроенная система платежей через ЮKassa

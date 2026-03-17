@@ -6,6 +6,7 @@ from aiogram.types import Message, CallbackQuery, InputMediaPhoto, FSInputFile
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.filters import Command
+from loguru import logger
 
 # Импорты проекта
 from db import UserRepo, PredictRepo, SettingsRepo, HoroscopeRepo, PaymentRepo, ImageRepo
@@ -23,6 +24,21 @@ from config import BOT_ADMIN_IDS
 
 tarot_router = Router()
 llm_service = LLMService()
+
+MIN_USER_INPUT_LEN = 5
+MAX_DREAM_INPUT_LEN = 2500
+MAX_TAROT_QUESTION_LEN = 1200
+
+
+def _normalize_user_input(text: str, max_len: int) -> str:
+    """Приводит пользовательский текст к безопасному виду для LLM и ограничивает длину."""
+    if not text:
+        return ""
+
+    normalized = text.strip()
+    if len(normalized) > max_len:
+        normalized = normalized[:max_len]
+    return normalized
 
 
 class TarotStates(StatesGroup):
@@ -139,8 +155,8 @@ async def horoscope_handler(message: Message, db_pool: asyncpg.Pool, bot: Bot):
     # await send_text(bot, message.chat.id, "✨ Звезды шепчут... Составляю прогноз...")
 
     # 4. Генерация
-    persona_key = user.get("narrative_persona", "default")
-    sys_prompt = get_system_prompt(PERSONAS[persona_key]["prompt"])
+    # Для гороскопа используем единый стиль, т.к. контент кешируется по знаку.
+    sys_prompt = get_system_prompt(PERSONAS["default"]["prompt"])
     user_prompt = make_horoscope_prompt(sign_emoji, today.strftime("%d.%m.%Y"))
 
     response = await llm_service.generate_response(user_prompt, sys_prompt)
@@ -153,15 +169,20 @@ async def horoscope_handler(message: Message, db_pool: asyncpg.Pool, bot: Bot):
         await send_text(bot, message.chat.id, "❌ Не удалось связаться с космосом. Попробуйте позже.")
         return
 
-    # 5. Сохранение и списание
+    # 5. Сохраняем ответ в кеш
     await horoscope_repo.add_horoscope(sign_name, today, response)
 
     payment_repo = PaymentRepo(db_pool)
-    await user_repo.update_user(user_id, karma=user['karma'] - price)
-    await payment_repo.add_internal_transaction(user_id, "daily_horoscope", -price)
-    await predict_repo.update_predicts(user_id, last_horoscope_daily_date=today)
+    sent_msg = await send_text(bot, message.chat.id, response)
+    if not sent_msg:
+        logger.error(f"Не удалось отправить гороскоп пользователю {user_id}, списание отменено.")
+        return
 
-    await send_text(bot, message.chat.id, response)
+    if price > 0:
+        new_karma = await payment_repo.apply_karma_transaction(user_id, "daily_horoscope", -price)
+        if new_karma is None:
+            logger.warning(f"Списание кармы за гороскоп не выполнено для пользователя {user_id}.")
+    await predict_repo.update_predicts(user_id, last_horoscope_daily_date=today)
 
 
 # ==========================
@@ -194,8 +215,17 @@ async def dream_start_input(callback: CallbackQuery, state: FSMContext, bot: Bot
 @tarot_router.message(TarotStates.waiting_for_dream)
 async def dream_process_handler(message: Message, state: FSMContext, db_pool: asyncpg.Pool, bot: Bot):
     user_id = message.from_user.id
-    dream_text = message.text
+    dream_text = _normalize_user_input(message.text or "", MAX_DREAM_INPUT_LEN)
     is_admin = user_id in BOT_ADMIN_IDS
+
+    if len(dream_text) < MIN_USER_INPUT_LEN:
+        await send_text(
+            bot,
+            message.chat.id,
+            "⚠️ Описание сна слишком короткое. Напишите хотя бы пару предложений.",
+            reply_markup=get_cancel_reply_keyboard(),
+        )
+        return
 
     # Проверка баланса
     price = await check_balance_and_get_price(user_id, "price_dreams", db_pool, bot, message.chat.id)
@@ -228,12 +258,18 @@ async def dream_process_handler(message: Message, state: FSMContext, db_pool: as
         await state.clear()
         return
 
-    # Списание и ответ
+    # Отправляем ответ и только потом списываем карму
     payment_repo = PaymentRepo(db_pool)
-    await user_repo.update_user(user_id, karma=user['karma'] - price)
-    await payment_repo.add_internal_transaction(user_id, "dream_interpretation", -price)
+    sent_msg = await send_text(bot, message.chat.id, response)
+    if not sent_msg:
+        logger.error(f"Не удалось отправить толкование сна пользователю {user_id}, списание отменено.")
+        await state.clear()
+        return
 
-    await send_text(bot, message.chat.id, response)
+    if price > 0:
+        new_karma = await payment_repo.apply_karma_transaction(user_id, "dream_interpretation", -price)
+        if new_karma is None:
+            logger.warning(f"Списание кармы за сон не выполнено для пользователя {user_id}.")
     await state.clear()
 
 
@@ -442,8 +478,17 @@ async def tarot_start_input(callback: CallbackQuery, state: FSMContext, bot: Bot
 @tarot_router.message(TarotStates.waiting_for_question)
 async def tarot_process_handler(message: Message, state: FSMContext, db_pool: asyncpg.Pool, bot: Bot):
     user_id = message.from_user.id
-    question = message.text
+    question = _normalize_user_input(message.text or "", MAX_TAROT_QUESTION_LEN)
     data = await state.get_data()
+
+    if len(question) < MIN_USER_INPUT_LEN:
+        await send_text(
+            bot,
+            message.chat.id,
+            "⚠️ Вопрос слишком короткий. Опишите ситуацию подробнее.",
+            reply_markup=get_cancel_reply_keyboard(),
+        )
+        return
 
     # Если данных нет (странный сбой или перезагрузка) - сброс
     if not data:
@@ -626,9 +671,13 @@ async def process_tarot_reading(
                     await image_repo.update_file_id(card_record['id'], new_id)
 
     # 6. Отправляем толкование
-    await send_text(bot, chat_id, response, reply_markup=main_kb)
+    sent_msg = await send_text(bot, chat_id, response, reply_markup=main_kb)
+    if not sent_msg:
+        logger.error(f"Не удалось отправить толкование Таро пользователю {user_id}, списание отменено.")
+        return
 
     # 7. Списываем карму (ТОЛЬКО СЕЙЧАС)
     if price > 0:
-        await user_repo.update_user(user_id, karma=user['karma'] - price)
-        await payment_repo.add_internal_transaction(user_id, layout_type, -price)
+        new_karma = await payment_repo.apply_karma_transaction(user_id, layout_type, -price)
+        if new_karma is None:
+            logger.warning(f"Списание кармы за расклад не выполнено для пользователя {user_id}.")

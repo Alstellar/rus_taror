@@ -21,9 +21,17 @@ LOG_GROUP_ID = int(os.getenv("LOG_GROUP_ID", 0))
 CHANNEL_ID_TARO = int(os.getenv("CHANNEL_ID_TARO", 0))
 CHANNEL_ID_MFN = int(os.getenv("CHANNEL_ID_MFN", 0))
 
-# --- Настройки LLM: SambaNova ---
-SAMBANOVA_API_KEY = os.getenv("SAMBANOVA_API_KEY")
-SAMBANOVA_MODEL = os.getenv("SAMBANOVA_MODEL")
+# --- Настройки LLM: OpenRouter ---
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "meta-llama/llama-4-maverick")
+OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
+OPENROUTER_FALLBACK_MODELS = [
+    model.strip() for model in os.getenv(
+        "OPENROUTER_FALLBACK_MODELS",
+        "meta-llama/llama-4-scout,qwen/qwen-2.5-72b-instruct"
+    ).split(",")
+    if model.strip()
+]
 
 # --- Настройки PostgreSQL ---
 DB_HOST = os.getenv("DB_HOST")

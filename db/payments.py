@@ -1,6 +1,6 @@
 # db/payments.py
 import asyncpg
-from typing import Optional, Any, List, Dict
+from typing import Optional
 
 class PaymentRepo:
     def __init__(self, pool: asyncpg.Pool):
@@ -54,3 +54,53 @@ class PaymentRepo:
         """
         async with self.pool.acquire() as conn:
             return await conn.fetchval(sql, user_id, operation_type, amount)
+
+    async def apply_karma_transaction(self, user_id: int, operation_type: str, amount: int) -> Optional[int]:
+        """
+        Атомарно применяет изменение кармы и пишет запись в payments_internal.
+        Возвращает новый баланс кармы, либо None если списание невозможно (например, недостаточно кармы).
+        """
+        if amount == 0:
+            return None
+
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                if amount < 0:
+                    # Защищаем от ухода баланса в минус при конкурентных запросах.
+                    new_karma = await conn.fetchval(
+                        """
+                        UPDATE users
+                        SET karma = karma + $2
+                        WHERE user_id = $1
+                          AND karma + $2 >= 0
+                        RETURNING karma;
+                        """,
+                        user_id,
+                        amount,
+                    )
+                else:
+                    new_karma = await conn.fetchval(
+                        """
+                        UPDATE users
+                        SET karma = karma + $2
+                        WHERE user_id = $1
+                        RETURNING karma;
+                        """,
+                        user_id,
+                        amount,
+                    )
+
+                if new_karma is None:
+                    return None
+
+                await conn.execute(
+                    """
+                    INSERT INTO payments_internal (user_id, type_operation, amount)
+                    VALUES ($1, $2, $3);
+                    """,
+                    user_id,
+                    operation_type,
+                    amount,
+                )
+
+                return int(new_karma)

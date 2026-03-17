@@ -102,11 +102,10 @@ async def cmd_add_karma(message: Message, command: CommandObject, db_pool: async
         await send_text(bot, message.chat.id, "❌ Пользователь не найден в БД.")
         return
 
-    new_karma = user['karma'] + amount
-    await user_repo.update_user(target_user_id, karma=new_karma)
-
-    # Лог операции
-    await payment_repo.add_internal_transaction(target_user_id, "admin_gift", amount)
+    new_karma = await payment_repo.apply_karma_transaction(target_user_id, "admin_gift", amount)
+    if new_karma is None:
+        await send_text(bot, message.chat.id, "❌ Не удалось применить изменение кармы (возможно, недостаточно средств).")
+        return
 
     await send_text(bot, message.chat.id, f"✅ Пользователю <code>{target_user_id}</code> начислено {amount} кармы.")
     await send_text(bot, target_user_id,
