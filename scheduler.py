@@ -252,38 +252,26 @@ async def daily_reminder_task(bot: Bot, pool: asyncpg.Pool):
 def setup_scheduler(bot: Bot, pool: asyncpg.Pool) -> AsyncIOScheduler:
     scheduler = AsyncIOScheduler()
 
-    # 1. Генерация подробных гороскопов в БД (3:00 ночи)
+    # Все задачи настролены по UTC, чтобы не зависеть от часового пояса сервера.
+
+    # 1. Генерация подробных гороскопов в БД (00:05 UTC = 03:00 МСК)
     scheduler.add_job(
         generate_daily_horoscopes_task,
-        CronTrigger(hour=3, minute=0),
+        CronTrigger(hour=0, minute=5, timezone='UTC'),
         args=[pool]
     )
 
-    # 2. Пост "Карта дня" в канал (8:00 утра)
-    scheduler.add_job(
-        post_card_of_the_day_task,
-        CronTrigger(hour=8, minute=0),
-        args=[bot, pool]
-    )
-
-    # 3. Пост "Гороскоп для всех" в канал (8:30 утра)
-    scheduler.add_job(
-        post_horoscope_summary_task,
-        CronTrigger(hour=8, minute=30),
-        args=[bot, pool]
-    )
-
-    # 4. Начисление бонусов (8:15 утра)
+    # 2. Начисление бонусов (04:00 UTC = 07:00 МСК)
     scheduler.add_job(
         daily_bonus_task,
-        CronTrigger(hour=8, minute=15),
+        CronTrigger(hour=4, minute=0, timezone='UTC'),
         args=[bot, pool]
     )
 
-    # 5. Напоминание пользователям (9:00 утра)
+    # 3. Напоминание пользователям (05:00 UTC = 08:00 МСК)
     scheduler.add_job(
         daily_reminder_task,
-        CronTrigger(hour=8, minute=1),
+        CronTrigger(hour=5, minute=0, timezone='UTC'),
         args=[bot, pool]
     )
 

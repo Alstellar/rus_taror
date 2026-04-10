@@ -7,6 +7,7 @@ load_dotenv()
 
 # --- Настройки Бота ---
 BOT_TOKEN = os.getenv("BOT_TOKEN")
+TELEGRAM_PROXY = os.getenv("TELEGRAM_PROXY", "").strip()
 
 # Преобразуем строку ID админов в список целых чисел
 admin_ids_str = os.getenv("BOT_ADMIN_IDS", "")

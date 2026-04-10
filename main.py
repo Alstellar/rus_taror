@@ -6,9 +6,10 @@ from loguru import logger
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
+from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.enums import ParseMode
 
-from config import BOT_TOKEN, DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME
+from config import BOT_TOKEN, TELEGRAM_PROXY, DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME
 from db.tables import create_tables
 from utils.logger import setup_logger
 
@@ -48,7 +49,21 @@ async def main():
     await create_tables(pool)
 
     # 3. Бот
-    bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+    bot_session = None
+    if TELEGRAM_PROXY:
+        try:
+            bot_session = AiohttpSession(proxy=TELEGRAM_PROXY)
+        except RuntimeError as e:
+            logger.critical(
+                f"Proxy is configured, but failed to initialize Telegram proxy session: {e}"
+            )
+            sys.exit(1)
+    bot = Bot(
+        token=BOT_TOKEN,
+        session=bot_session,
+        default=DefaultBotProperties(parse_mode=ParseMode.HTML)
+    )
+    logger.info("Telegram proxy: enabled." if TELEGRAM_PROXY else "Telegram proxy: disabled.")
     dp = Dispatcher()
 
     # Внедряем пул БД
