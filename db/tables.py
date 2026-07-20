@@ -25,6 +25,7 @@ async def create_tables(pool: asyncpg.Pool):
                                narrative_persona       TEXT DEFAULT 'default', -- Стиль общения (default, witch, cyberpunk, psychologist, etc.)
                                karma                   BIGINT    DEFAULT 50,
                                can_send_msg            BOOLEAN   DEFAULT true,
+                               is_ban                  BOOLEAN   DEFAULT false,
                                id_referrer             BIGINT    DEFAULT 0,
                                registration_date       TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                                last_active_date        TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -55,9 +56,18 @@ async def create_tables(pool: asyncpg.Pool):
                                payload    TEXT        NOT NULL,
                                payment_id TEXT UNIQUE NOT NULL,
                                status     TEXT        DEFAULT 'pending',
+                               confirmation_url TEXT,
                                created_at TIMESTAMPTZ DEFAULT NOW()
                            );
                            ''')
+
+        # The application is also used with databases created by older releases.
+        await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_ban BOOLEAN DEFAULT false;")
+        await conn.execute("ALTER TABLE payments_yookassa ADD COLUMN IF NOT EXISTS confirmation_url TEXT;")
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS payments_yookassa_active_idx "
+            "ON payments_yookassa (user_id, status, created_at DESC);"
+        )
 
         # 4. Internal Payments (История операций кармы)
         await conn.execute('''

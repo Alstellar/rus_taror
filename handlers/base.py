@@ -6,7 +6,8 @@ from aiogram.filters import Command
 
 from utils.sender import send_text, delete_message, edit_text
 from keyboards.reply_kb import get_main_menu_keyboard
-from config import BOT_ADMIN_IDS
+from keyboards.inline_kb import get_offer_keyboard
+from config import BOT_ADMIN_IDS, PUBLIC_OFFER_URL
 
 base_router = Router()
 
@@ -57,8 +58,13 @@ async def info_handler(message: Message, bot: Bot):
         "/tarot — Расклады Таро\n"
         "/dream — Сонник\n"
         "/shop — Покупка кармы и премиума\n\n"
+        "<b>📜 Оферта и оплата:</b>\n"
+        f"{PUBLIC_OFFER_URL}\n"
+        "Покупки, сроки оказания услуг и возвраты регулируются публичной офертой.\n\n"
         "<b>📞 Поддержка:</b>\n"
-        "/support — Связаться с разработчиком\n\n"
+        "Если у вас возникли проблемы с оплатой, начислением кармы, подпиской или работой бота, напишите:\n\n"
+        "Telegram: @Alstellar\n"
+        "Email: lekha-legkv@yandex.ru\n\n"
     )
     await send_text(bot, message.chat.id, text)
 
@@ -67,20 +73,21 @@ async def info_handler(message: Message, bot: Bot):
 async def support_handler(message: Message, bot: Bot):
     text = (
         "<b>📞 Техническая поддержка</b>\n\n"
-        "Если у вас возникли проблемы с оплатой, бот не отвечает или есть предложения:\n\n"
-        "📩 Пишите сюда: @Alstellar"
+        "Если у вас возникли проблемы с оплатой, начислением кармы, подпиской или работой бота, напишите нам:\n\n"
+        "Telegram: @Alstellar\n"
+        "Email: lekha-legkv@yandex.ru"
     )
     await send_text(bot, message.chat.id, text)
 
 
-@base_router.message(F.text == "📜 Пользовательское соглашение")
+@base_router.message(F.text.in_({"📜 Оферта и условия", "📜 Пользовательское соглашение"}))
 async def agreement_handler(message: Message, bot: Bot):
     text = (
-        "<b>📜 Пользовательское соглашение</b>\n\n"
-        "1. <b>Развлекательный характер:</b> Все предсказания генерируются искусственным интеллектом и носят исключительно развлекательный характер.\n\n"
-        "2. <b>Ответственность:</b> Администрация не несет ответственности за принятые вами решения на основе ответов бота.\n\n"
-        "3. <b>Возвраты:</b> Покупки цифровых товаров (карма, подписка) являются окончательными и возврату не подлежат, кроме случаев технического сбоя.\n\n"
-        "4. <b>Правила:</b> Запрещено использовать бота для спама или мошенничества.\n\n"
-        "<i>Используя бота, вы принимаете эти условия.</i>"
+        "<b>📜 Оферта и условия использования</b>\n\n"
+        "Полные правила оформления заказа, способы оплаты, сроки оказания услуг, условия возврата и реквизиты исполнителя опубликованы в публичной оферте.\n\n"
+        "Расклады, гороскопы и толкования снов носят информационно-развлекательный характер и не являются профессиональной консультацией.\n\n"
+        "Продолжая использование бота, вы подтверждаете, что ознакомились с публичной офертой и принимаете ее условия.\n\n"
+        "Поддержка: @Alstellar\n"
+        "Email: lekha-legkv@yandex.ru"
     )
-    await send_text(bot, message.chat.id, text)
+    await send_text(bot, message.chat.id, text, reply_markup=get_offer_keyboard())

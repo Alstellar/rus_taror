@@ -8,6 +8,7 @@ load_dotenv()
 # --- Настройки Бота ---
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 TELEGRAM_PROXY = os.getenv("TELEGRAM_PROXY", "").strip()
+PUBLIC_OFFER_URL = os.getenv("PUBLIC_OFFER_URL", "https://teletype.in/@alstellar/x_-_O_9nIou")
 
 # Преобразуем строку ID админов в список целых чисел
 admin_ids_str = os.getenv("BOT_ADMIN_IDS", "")
@@ -33,6 +34,8 @@ OPENROUTER_FALLBACK_MODELS = [
     ).split(",")
     if model.strip()
 ]
+CLAUDEHUB_API_KEY = os.getenv("CLAUDEHUB_API_KEY")
+CLAUDEHUB_BASE_URL = os.getenv("CLAUDEHUB_BASE_URL", "https://api.claudehub.fun/v1")
 
 # --- Настройки PostgreSQL ---
 DB_HOST = os.getenv("DB_HOST")

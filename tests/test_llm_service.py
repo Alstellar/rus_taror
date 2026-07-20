@@ -78,7 +78,7 @@ class LLMServiceTests(unittest.IsolatedAsyncioTestCase):
                 self.chat = SimpleNamespace(completions=FakeCompletions())
 
         class FakeAsyncOpenAI:
-            def __init__(self, api_key, base_url):
+            def __init__(self, api_key, base_url, **kwargs):
                 self._api_key = api_key
                 self._base_url = base_url
                 self.chat = FakeClient().chat
@@ -86,10 +86,9 @@ class LLMServiceTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(llm_module, "OPENROUTER_API_KEY", "test-key"), \
              patch.object(llm_module, "OPENROUTER_MODEL", "primary/model"), \
              patch.object(llm_module, "OPENROUTER_FALLBACK_MODELS", ["fallback/model"]), \
-             patch.object(llm_module, "AsyncOpenAI", FakeAsyncOpenAI), \
-             patch.object(llm_module, "APIError", Exception):
+             patch.object(llm_module, "AsyncOpenAI", FakeAsyncOpenAI):
             svc = llm_module.LLMService()
-            result = await svc.generate_response("hello", "system", retries=1)
+            result = await svc.generate_response("hello", "system")
 
         self.assertEqual(result, "ok from fallback")
         self.assertEqual(calls, ["primary/model", "fallback/model"])
@@ -104,16 +103,15 @@ class LLMServiceTests(unittest.IsolatedAsyncioTestCase):
                 self.chat = SimpleNamespace(completions=FakeCompletions())
 
         class FakeAsyncOpenAI:
-            def __init__(self, api_key, base_url):
+            def __init__(self, api_key, base_url, **kwargs):
                 self.chat = FakeClient().chat
 
         with patch.object(llm_module, "OPENROUTER_API_KEY", "test-key"), \
              patch.object(llm_module, "OPENROUTER_MODEL", "primary/model"), \
              patch.object(llm_module, "OPENROUTER_FALLBACK_MODELS", ["fallback/model"]), \
-             patch.object(llm_module, "AsyncOpenAI", FakeAsyncOpenAI), \
-             patch.object(llm_module, "APIError", Exception):
+             patch.object(llm_module, "AsyncOpenAI", FakeAsyncOpenAI):
             svc = llm_module.LLMService()
-            result = await svc.generate_response("hello", "system", retries=1)
+            result = await svc.generate_response("hello", "system")
 
         self.assertIsNone(result)
 

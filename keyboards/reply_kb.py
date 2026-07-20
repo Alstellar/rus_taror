@@ -8,7 +8,7 @@ def get_main_menu_keyboard(is_admin: bool = False) -> ReplyKeyboardMarkup:
         [KeyboardButton(text="🌙 Гороскоп"), KeyboardButton(text="🃏 Таро расклады")],
         [KeyboardButton(text="💤 Сонник"), KeyboardButton(text="🏪 Маркетплейс")],
         [KeyboardButton(text="📌 Наши проекты"), KeyboardButton(text="ℹ️ Инфо")],
-        [KeyboardButton(text="📜 Пользовательское соглашение")]
+        [KeyboardButton(text="📜 Оферта и условия")]
     ]
 
     if is_admin:

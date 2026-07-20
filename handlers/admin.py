@@ -9,19 +9,26 @@ from aiogram.fsm.state import StatesGroup, State
 from config import BOT_ADMIN_IDS
 from db import UserRepo, SettingsRepo, PaymentRepo
 from services.media_loader import MediaLoaderService
+from services.llm_config import LLMSettingsService, PROVIDER_LABELS
 from utils.sender import send_text, delete_message, edit_text
-from keyboards.inline_kb import get_admin_main_keyboard, get_confirm_broadcast_keyboard, get_cancel_keyboard
+from keyboards.inline_kb import (
+    get_admin_main_keyboard, get_confirm_broadcast_keyboard, get_cancel_keyboard,
+    get_llm_main_keyboard, get_llm_models_keyboard, get_llm_priority_keyboard,
+    get_llm_provider_choice_keyboard, get_llm_provider_keyboard,
+)
 from keyboards.reply_kb import get_cancel_reply_keyboard, get_main_menu_keyboard
 
 # Инициализация роутера и фильтра на админов
 admin_router = Router()
 admin_router.message.filter(F.from_user.id.in_(BOT_ADMIN_IDS))
+admin_router.callback_query.filter(F.from_user.id.in_(BOT_ADMIN_IDS))
 
 
 # Состояния для FSM (Рассылка)
 class AdminStates(StatesGroup):
     waiting_for_broadcast_msg = State()
     waiting_for_user_id = State()
+    waiting_for_openrouter_model = State()
 
 
 # ==========================================================
@@ -55,6 +62,144 @@ async def admin_panel_handler(message: Message, bot: Bot):
         "👇 <b>Управление рассылками:</b>"
     )
     await send_text(bot, message.chat.id, text, reply_markup=get_admin_main_keyboard())
+
+
+# ==========================================================
+# 🧠 LLM SETTINGS
+# ==========================================================
+async def show_llm_main(callback: CallbackQuery, pool: asyncpg.Pool, bot: Bot):
+    priority = await LLMSettingsService(pool).get_priority()
+    active = [f"{index + 1}. {item['provider'].title()} — <code>{item['model']}</code>" for index, item in enumerate(priority) if item]
+    text = "🧠 <b>Настройки LLM</b>\n\n" + ("<b>Текущая очередь:</b>\n" + "\n".join(active) if active else "Очередь пуста.")
+    await edit_text(bot, callback.message.chat.id, callback.message.message_id, text, reply_markup=get_llm_main_keyboard())
+
+
+@admin_router.callback_query(F.data == "admin_llm")
+async def admin_llm(callback: CallbackQuery, db_pool: asyncpg.Pool, bot: Bot):
+    await callback.answer()
+    await show_llm_main(callback, db_pool, bot)
+
+
+@admin_router.callback_query(F.data == "llm_admin_back")
+async def llm_admin_back(callback: CallbackQuery, bot: Bot):
+    await callback.answer()
+    await edit_text(bot, callback.message.chat.id, callback.message.message_id, "⚙️ <b>Админ-панель</b>", reply_markup=get_admin_main_keyboard())
+
+
+@admin_router.callback_query(F.data.startswith("llm_provider_"))
+async def llm_provider(callback: CallbackQuery, bot: Bot):
+    provider = callback.data.rsplit("_", 1)[1]
+    await callback.answer()
+    await edit_text(
+        bot, callback.message.chat.id, callback.message.message_id,
+        f"🔌 <b>{PROVIDER_LABELS[provider]}</b>\n\nВыберите действие.",
+        reply_markup=get_llm_provider_keyboard(provider),
+    )
+
+
+@admin_router.callback_query(F.data.startswith("llm_balance_"))
+async def llm_balance(callback: CallbackQuery, db_pool: asyncpg.Pool, bot: Bot):
+    provider = callback.data.rsplit("_", 1)[1]
+    await callback.answer("Проверяю баланс…")
+    try:
+        balance, currency = await LLMSettingsService(db_pool).balance(provider)
+        await send_text(bot, callback.message.chat.id, f"💳 Баланс <b>{PROVIDER_LABELS[provider]}</b>: <b>{balance:.4f} {currency}</b>")
+    except Exception as exc:
+        await send_text(bot, callback.message.chat.id, f"❌ Не удалось проверить баланс {PROVIDER_LABELS[provider]}: {exc}")
+
+
+@admin_router.callback_query(F.data.startswith("llm_models_"))
+async def llm_models(callback: CallbackQuery, state: FSMContext, db_pool: asyncpg.Pool, bot: Bot):
+    provider = callback.data.rsplit("_", 1)[1]
+    await callback.answer("Загружаю модели…")
+    service = LLMSettingsService(db_pool)
+    try:
+        models = await service.get_openrouter_models() if provider == "openrouter" else await service.claudehub_models()
+    except Exception as exc:
+        await send_text(bot, callback.message.chat.id, f"❌ Не удалось получить модели ClaudeHub: {exc}")
+        return
+    await state.update_data(llm_display_models=models)
+    text = f"🤖 <b>Модели {PROVIDER_LABELS[provider]}</b>\n\n"
+    text += "Выберите модели в разделе «Приоритет»." if models else "Список моделей пуст."
+    await edit_text(
+        bot, callback.message.chat.id, callback.message.message_id, text,
+        reply_markup=get_llm_models_keyboard(models, "llm_noop", f"llm_provider_{provider}", extra=provider == "openrouter"),
+    )
+
+
+@admin_router.callback_query(F.data.startswith("llm_noop_"))
+async def llm_noop(callback: CallbackQuery):
+    await callback.answer("Для использования модели добавьте её в «Приоритет».", show_alert=True)
+
+
+@admin_router.callback_query(F.data == "llm_add_openrouter")
+async def llm_add_openrouter(callback: CallbackQuery, state: FSMContext, bot: Bot):
+    await callback.answer()
+    await state.set_state(AdminStates.waiting_for_openrouter_model)
+    await send_text(bot, callback.message.chat.id, "Введите идентификатор модели OpenRouter, например <code>anthropic/claude-sonnet-4</code>.")
+
+
+@admin_router.message(AdminStates.waiting_for_openrouter_model)
+async def save_openrouter_model(message: Message, state: FSMContext, db_pool: asyncpg.Pool, bot: Bot):
+    model = (message.text or "").strip()
+    if not model or len(model) > 150 or any(char.isspace() for char in model):
+        await send_text(bot, message.chat.id, "⚠️ Укажите корректный идентификатор модели без пробелов.")
+        return
+    service = LLMSettingsService(db_pool)
+    models = await service.get_openrouter_models()
+    if model not in models:
+        await service.save_openrouter_models([*models, model])
+    await state.clear()
+    await send_text(bot, message.chat.id, f"✅ Модель <code>{model}</code> добавлена в OpenRouter.")
+
+
+@admin_router.callback_query(F.data == "llm_priority")
+async def llm_priority(callback: CallbackQuery, db_pool: asyncpg.Pool, bot: Bot):
+    await callback.answer()
+    priority = await LLMSettingsService(db_pool).get_priority()
+    await edit_text(bot, callback.message.chat.id, callback.message.message_id, "↕️ <b>Приоритет LLM</b>\n\nВыберите позицию для настройки.", reply_markup=get_llm_priority_keyboard(priority))
+
+
+@admin_router.callback_query(F.data.startswith("llm_priority_slot_"))
+async def llm_priority_slot(callback: CallbackQuery, state: FSMContext, bot: Bot):
+    slot = int(callback.data.rsplit("_", 1)[1])
+    await state.update_data(llm_priority_slot=slot)
+    await callback.answer()
+    await edit_text(bot, callback.message.chat.id, callback.message.message_id, f"↕️ Позиция {slot + 1}: выберите провайдера.", reply_markup=get_llm_provider_choice_keyboard())
+
+
+@admin_router.callback_query(F.data.startswith("llm_priority_provider_"))
+async def llm_priority_provider(callback: CallbackQuery, state: FSMContext, db_pool: asyncpg.Pool, bot: Bot):
+    provider = callback.data.rsplit("_", 1)[1]
+    service = LLMSettingsService(db_pool)
+    await callback.answer("Загружаю модели…")
+    try:
+        models = await service.get_openrouter_models() if provider == "openrouter" else await service.claudehub_models()
+    except Exception as exc:
+        await send_text(bot, callback.message.chat.id, f"❌ Не удалось получить модели {PROVIDER_LABELS[provider]}: {exc}")
+        return
+    await state.update_data(llm_priority_provider=provider, llm_priority_models=models)
+    await edit_text(bot, callback.message.chat.id, callback.message.message_id, f"🤖 Выберите модель {PROVIDER_LABELS[provider]}.", reply_markup=get_llm_models_keyboard(models, "llm_priority_model", "llm_priority"))
+
+
+@admin_router.callback_query(F.data.startswith("llm_priority_model_"))
+async def llm_priority_model(callback: CallbackQuery, state: FSMContext, db_pool: asyncpg.Pool, bot: Bot):
+    index = int(callback.data.rsplit("_", 1)[1])
+    data = await state.get_data()
+    models, provider, slot = data.get("llm_priority_models", []), data.get("llm_priority_provider"), data.get("llm_priority_slot")
+    if provider not in PROVIDER_LABELS or slot is None or index >= len(models):
+        await callback.answer("Список устарел. Откройте позицию заново.", show_alert=True)
+        return
+    service = LLMSettingsService(db_pool)
+    priority = await service.get_priority()
+    priority[slot] = {"provider": provider, "model": models[index]}
+    await service.save_priority(priority)
+    await callback.answer("Приоритет сохранён.")
+    await edit_text(
+        bot, callback.message.chat.id, callback.message.message_id,
+        "↕️ <b>Приоритет LLM</b>\n\nВыберите позицию для настройки.",
+        reply_markup=get_llm_priority_keyboard(priority),
+    )
 
 
 # ==========================================================

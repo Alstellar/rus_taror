@@ -7,6 +7,7 @@ from aiogram.enums import ChatMemberStatus
 from loguru import logger
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.interval import IntervalTrigger
 
 # Импорты проекта
 from db import UserRepo, PredictRepo, HoroscopeRepo, PaymentRepo, SettingsRepo, ImageRepo
@@ -16,6 +17,7 @@ from utils.personas import PERSONAS
 from utils.sender import send_text
 from utils.helpers import is_premium
 from config import LOG_GROUP_ID, CHANNEL_ID_TARO, CHANNEL_ID_MFN
+from services.yookassa_api import YooKassaService
 
 
 # ============================================================
@@ -36,7 +38,8 @@ async def daily_bonus_task(bot: Bot, pool: asyncpg.Pool):
     bonus_prem_val = int(s_prem["value"]) if s_prem else 50
     bonus_chan_val = int(s_chan["value"]) if s_chan else 1
 
-    all_users_ids = await user_repo.get_all_user_ids()
+    # Blocking the bot only stops outgoing messages; it must not affect earned bonuses.
+    all_users_ids = await user_repo.get_all_user_ids(include_banned=True)
     count_users = 0
     total_bonus = 0
 
@@ -82,7 +85,7 @@ async def generate_daily_horoscopes_task(pool: asyncpg.Pool):
     """Ночная генерация подробных гороскопов для бота."""
     logger.info("🌌 Генерация подробных гороскопов для бота...")
     horoscope_repo = HoroscopeRepo(pool)
-    llm = LLMService()
+    llm = LLMService(pool)
 
     signs = ["овен", "телец", "близнецы", "рак", "лев", "дева",
              "весы", "скорпион", "стрелец", "козерог", "водолей", "рыбы"]
@@ -117,7 +120,7 @@ async def post_card_of_the_day_task(bot: Bot, pool: asyncpg.Pool):
     """Публикует Карту Дня в канал."""
     logger.info("📢 Публикация Карты Дня...")
     image_repo = ImageRepo(pool)
-    llm = LLMService()
+    llm = LLMService(pool)
 
     cards = await image_repo.get_random_cards("tarot_classic", 1)
     if not cards:
@@ -161,7 +164,7 @@ async def post_horoscope_summary_task(bot: Bot, pool: asyncpg.Pool):
     и публикует его в канал одним постом.
     """
     logger.info("📢 Генерация и публикация гороскопа для канала...")
-    llm = LLMService()
+    llm = LLMService(pool)
 
     today_str = date.today().strftime("%d.%m.%Y")
 
@@ -235,15 +238,23 @@ async def daily_reminder_task(bot: Bot, pool: asyncpg.Pool):
         if horoscope_done or tarot_done:
             continue
 
-        try:
-            await send_text(bot, user_id, text)
+        sent = await send_text(
+            bot,
+            user_id,
+            text,
+            on_unavailable=user_repo.set_ban_status,
+        )
+        if sent:
             count += 1
-        except Exception:
-            await user_repo.update_user(user_id, can_send_msg=False)
 
         await asyncio.sleep(0.05)
 
     logger.info(f"✅ Напоминание отправлено {count} пользователям.")
+
+
+async def reconcile_pending_payments_task(bot: Bot, pool: asyncpg.Pool):
+    """Restarts polling for payments that survived a bot restart."""
+    await YooKassaService(bot, pool).resume_pending_checks()
 
 
 # ============================================================
@@ -273,6 +284,14 @@ def setup_scheduler(bot: Bot, pool: asyncpg.Pool) -> AsyncIOScheduler:
         daily_reminder_task,
         CronTrigger(hour=5, minute=0, timezone='UTC'),
         args=[bot, pool]
+    )
+
+    scheduler.add_job(
+        reconcile_pending_payments_task,
+        IntervalTrigger(minutes=15),
+        args=[bot, pool],
+        id="reconcile_pending_payments",
+        replace_existing=True,
     )
 
     return scheduler

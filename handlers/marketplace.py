@@ -1,6 +1,6 @@
 # handlers/marketplace.py
 import asyncpg
-import asyncio
+from datetime import datetime, timezone
 from aiogram import Router, F, Bot
 from aiogram.types import Message, CallbackQuery
 from aiogram.filters import Command
@@ -19,14 +19,17 @@ marketplace_router = Router()
 async def show_marketplace(message: Message, db_pool: asyncpg.Pool, bot: Bot):
     settings_repo = SettingsRepo(db_pool)
     prices = await settings_repo.get_all_settings()
+    purchase_bonus = prices.get("karma_subscription_purchase_bonus", {}).get("value", "100")
+    daily_bonus = prices.get("karma_subscription_daily_bonus", {}).get("value", "50")
 
     text = (
         "🏪 <b>Маркетплейс</b>\n\n"
         "Здесь вы можете приобрести карму или оформить Премиум-подписку.\n\n"
         "👑 <b>Преимущества Премиума:</b>\n"
+        f"• +{purchase_bonus} ✨ кармы сразу после оформления\n"
+        f"• +{daily_bonus} ✨ кармы каждый день действия подписки\n"
         "• Доступ к смене Персонажей 🎭\n"
-        "• Доступ к смене Колод 🃏\n"
-        "• Ежедневное начисление кармы ✨"
+        "• Доступ к смене Колод 🃏"
     )
 
     await send_text(bot, message.chat.id, text, reply_markup=get_marketplace_keyboard(prices))
@@ -37,14 +40,17 @@ async def show_marketplace(message: Message, db_pool: asyncpg.Pool, bot: Bot):
 async def back_to_marketplace(callback: CallbackQuery, db_pool: asyncpg.Pool, bot: Bot):
     settings_repo = SettingsRepo(db_pool)
     prices = await settings_repo.get_all_settings()
+    purchase_bonus = prices.get("karma_subscription_purchase_bonus", {}).get("value", "100")
+    daily_bonus = prices.get("karma_subscription_daily_bonus", {}).get("value", "50")
 
     text = (
         "🏪 <b>Маркетплейс</b>\n\n"
         "Здесь вы можете приобрести карму или оформить Премиум-подписку.\n\n"
         "👑 <b>Преимущества Премиума:</b>\n"
+        f"• +{purchase_bonus} ✨ кармы сразу после оформления\n"
+        f"• +{daily_bonus} ✨ кармы каждый день действия подписки\n"
         "• Доступ к смене Персонажей 🎭\n"
-        "• Доступ к смене Колод 🃏\n"
-        "• Ежедневное начисление кармы ✨"
+        "• Доступ к смене Колод 🃏"
     )
 
     await edit_text(
@@ -94,6 +100,33 @@ async def process_buy_click(callback: CallbackQuery, db_pool: asyncpg.Pool, bot:
     yookassa = YooKassaService(bot, db_pool)
 
     try:
+        # Reuse a just-created link for the same product. It prevents rapid taps
+        # from producing a stack of identical invoices.
+        recent_payment = await payment_repo.get_recent_active_payment(user_id, item_type, minutes=5)
+        if recent_payment and recent_payment["confirmation_url"]:
+            await edit_text(
+                bot,
+                callback.message.chat.id,
+                callback.message.message_id,
+                f"💳 <b>У вас уже есть счет на оплату: {recent_payment['amount']}₽</b>\n"
+                f"Товар: {description}\n\n"
+                "Используйте текущую ссылку. Новый счет для этого товара можно будет создать через 5 минут.",
+                reply_markup=get_payment_link_keyboard(recent_payment["confirmation_url"]),
+            )
+            return
+
+        active_count = await payment_repo.count_active_payments(user_id, hours=4)
+        if active_count >= 10:
+            await edit_text(
+                bot,
+                callback.message.chat.id,
+                callback.message.message_id,
+                "⚠️ У вас уже 10 активных счетов. Дождитесь завершения или отмены одного из них, "
+                "затем попробуйте снова.",
+                reply_markup=get_marketplace_keyboard(prices),
+            )
+            return
+
         # Создаем платеж в ЮКассе
         payment_url, payment_id = await yookassa.create_payment(amount, description, user_id)
 
@@ -102,14 +135,19 @@ async def process_buy_click(callback: CallbackQuery, db_pool: asyncpg.Pool, bot:
             user_id=user_id,
             amount=amount,
             payload=item_type,
-            payment_id=payment_id
+            payment_id=payment_id,
+            confirmation_url=payment_url,
         )
 
         # 4. Запускаем фоновую задачу проверки
         # create_task "отпускает" управление, код идет дальше, а проверка крутится параллельно
-        asyncio.create_task(
-            yookassa.check_payment_loop(payment_id, user_id, item_type, amount)
-        )
+        yookassa.start_check({
+            "payment_id": payment_id,
+            "user_id": user_id,
+            "payload": item_type,
+            "amount": amount,
+            "created_at": datetime.now(timezone.utc),
+        })
 
         # 5. Показываем кнопку оплаты пользователю
         await edit_text(
@@ -118,7 +156,8 @@ async def process_buy_click(callback: CallbackQuery, db_pool: asyncpg.Pool, bot:
             callback.message.message_id,
             f"💳 <b>Счет на оплату: {amount}₽</b>\n"
             f"Товар: {description}\n\n"
-            f"<i>Нажмите кнопку ниже для оплаты. После успешной транзакции бот автоматически начислит вам покупку (обычно в течение 1 минуты).</i>",
+            f"<i>Нажмите кнопку ниже для оплаты. После успешной транзакции бот автоматически начислит вам покупку (обычно в течение 1 минуты).</i>\n\n"
+            f"Нажимая «Перейти к оплате», вы подтверждаете, что ознакомились с Публичной офертой и принимаете ее условия.",
             reply_markup=get_payment_link_keyboard(payment_url)
         )
 

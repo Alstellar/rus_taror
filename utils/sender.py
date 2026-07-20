@@ -1,7 +1,7 @@
 ﻿# utils/sender.py
 import asyncio
 import re
-from typing import Union, List, Optional
+from typing import Awaitable, Callable, Union, List, Optional
 
 import asyncpg
 from aiogram import Bot
@@ -20,6 +20,20 @@ from db import ImageRepo
 
 TELEGRAM_MESSAGE_LIMIT = 4096
 SAFE_TEXT_CHUNK = 3900
+UnavailableCallback = Callable[[int], Awaitable[None]]
+_default_unavailable_handler: Optional[UnavailableCallback] = None
+
+
+def configure_unavailable_handler(handler: UnavailableCallback) -> None:
+    """Registers the application-level action for users unreachable by Telegram."""
+    global _default_unavailable_handler
+    _default_unavailable_handler = handler
+
+
+async def _mark_unavailable(chat_id: int, callback: Optional[UnavailableCallback]) -> None:
+    handler = callback or _default_unavailable_handler
+    if handler:
+        await handler(chat_id)
 
 
 def _strip_html_tags(text: str) -> str:
@@ -55,6 +69,7 @@ async def send_text(
     reply_markup: Union[ReplyKeyboardMarkup, InlineKeyboardMarkup, None] = None,
     parse_mode: str = "HTML",
     disable_web_page_preview: bool = True,
+    on_unavailable: Optional[UnavailableCallback] = None,
     **kwargs,
 ) -> Optional[Message]:
     """Безопасная отправка текстового сообщения."""
@@ -88,6 +103,7 @@ async def send_text(
         return sent_msg
     except TelegramForbiddenError:
         logger.warning(f"🚫 Пользователь {chat_id} заблокировал бота.")
+        await _mark_unavailable(chat_id, on_unavailable)
     except TelegramRetryAfter as e:
         logger.warning(f"⏳ Flood limit для {chat_id}. Ждем {e.retry_after} сек.")
         await asyncio.sleep(e.retry_after + 0.1)
@@ -101,6 +117,11 @@ async def send_text(
             **kwargs,
         )
     except TelegramAPIError as e:
+        is_unavailable = "chat not found" in str(e).lower()
+        if is_unavailable:
+            logger.warning(f"🚫 Чат {chat_id} недоступен: {e}")
+            await _mark_unavailable(chat_id, on_unavailable)
+            return None
         if mode == "HTML":
             logger.warning(f"⚠️ Ошибка HTML в чате {chat_id}, пробуем plain text fallback: {e}")
             plain_chunks = _split_text(_strip_html_tags(prepared_text))

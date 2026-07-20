@@ -41,8 +41,20 @@ class UserRepo:
         async with self.pool.acquire() as conn:
             await conn.execute(sql, *values)
 
-    async def get_all_user_ids(self) -> List[int]:
-        sql = "SELECT user_id FROM users;"
+    async def set_ban_status(self, user_id: int, is_ban: bool) -> None:
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE users SET is_ban = $2, can_send_msg = $3 WHERE user_id = $1;",
+                user_id,
+                is_ban,
+                not is_ban,
+            )
+
+    async def get_all_user_ids(self, include_banned: bool = False) -> List[int]:
+        sql = "SELECT user_id FROM users"
+        if not include_banned:
+            sql += " WHERE COALESCE(is_ban, false) = false"
+        sql += ";"
         async with self.pool.acquire() as conn:
             rows = await conn.fetch(sql)
             return [row['user_id'] for row in rows]

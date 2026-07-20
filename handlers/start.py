@@ -30,6 +30,10 @@ async def cmd_start(message: Message, command: CommandObject, bot: Bot, db_pool:
     existing_user = await user_repo.get_user(user_id)
     is_new_user = existing_user is None
 
+    # A user can return after unblocking the bot.
+    if not is_new_user:
+        await user_repo.set_ban_status(user_id, False)
+
     # 2. Обработка реферальной системы (только для новых)
     id_referrer = 0
     if is_new_user:

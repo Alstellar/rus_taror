@@ -12,6 +12,10 @@ from aiogram.enums import ParseMode
 from config import BOT_TOKEN, TELEGRAM_PROXY, DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME
 from db.tables import create_tables
 from utils.logger import setup_logger
+from utils.access import PrivateRegisteredUserMiddleware
+from utils.sender import configure_unavailable_handler
+from services.yookassa_api import YooKassaService
+from db import UserRepo
 
 # Импорт роутеров
 from handlers.start import start_router
@@ -68,6 +72,8 @@ async def main():
 
     # Внедряем пул БД
     dp["db_pool"] = pool
+    dp.update.outer_middleware(PrivateRegisteredUserMiddleware(pool))
+    configure_unavailable_handler(UserRepo(pool).set_ban_status)
 
     # 4. Регистрация роутеров
 
@@ -81,6 +87,7 @@ async def main():
     # 5. Планировщик
     scheduler = setup_scheduler(bot, pool)
     scheduler.start()
+    await YooKassaService(bot, pool).resume_pending_checks()
     logger.info("⏰ Планировщик запущен.")
 
     # 6. Запуск

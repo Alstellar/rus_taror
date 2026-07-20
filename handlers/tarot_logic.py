@@ -23,7 +23,7 @@ from keyboards.reply_kb import get_cancel_reply_keyboard, get_main_menu_keyboard
 from config import BOT_ADMIN_IDS
 
 tarot_router = Router()
-llm_service = LLMService()
+_tarot_generation_locks: dict[int, asyncio.Lock] = {}
 
 MIN_USER_INPUT_LEN = 5
 MAX_DREAM_INPUT_LEN = 2500
@@ -159,7 +159,7 @@ async def horoscope_handler(message: Message, db_pool: asyncpg.Pool, bot: Bot):
     sys_prompt = get_system_prompt(PERSONAS["default"]["prompt"])
     user_prompt = make_horoscope_prompt(sign_emoji, today.strftime("%d.%m.%Y"))
 
-    response = await llm_service.generate_response(user_prompt, sys_prompt)
+    response = await LLMService(db_pool).generate_response(user_prompt, sys_prompt)
 
     # 3. УДАЛЯЕМ ГИФКУ
     if loading_msg:
@@ -247,7 +247,7 @@ async def dream_process_handler(message: Message, state: FSMContext, db_pool: as
     sys_prompt = get_system_prompt(PERSONAS[persona_key]["prompt"])
     user_prompt = make_dream_prompt(dream_text)
 
-    response = await llm_service.generate_response(user_prompt, sys_prompt)
+    response = await LLMService(db_pool).generate_response(user_prompt, sys_prompt)
 
     # 3. УДАЛЯЕМ ГИФКУ
     if loading_msg:
@@ -311,7 +311,7 @@ async def tarot_selection_handler(callback: CallbackQuery, state: FSMContext, db
 
     config = configs.get(layout_type)
     if not config:
-        await callback.answer("Неизвестный расклад")
+        await callback.answer("Неизвестный расклад", show_alert=True)
         return
 
     price_key, layout_name, cards_count = config
@@ -331,15 +331,17 @@ async def tarot_selection_handler(callback: CallbackQuery, state: FSMContext, db
     if layout_type == "tarot_daily":
         if predicts.get("last_tarot_daily_date") == today:
             await callback.answer("⏳ Вы уже тянули Карту дня сегодня!", show_alert=True)
+            logger.info(f"Карта дня отклонена дневным лимитом: user_id={user_id}.")
             return
 
-        await process_tarot_reading(
+        await callback.answer()
+        is_success = await process_tarot_reading(
             user_id, callback.message.chat.id,
             layout_type, layout_name, cards_count,
             "Общий прогноз на сегодня", 0, db_pool, bot
         )
-        await predict_repo.update_predicts(user_id, last_tarot_daily_date=today)
-        await callback.answer()
+        if is_success:
+            await predict_repo.update_predicts(user_id, last_tarot_daily_date=today)
         return
 
     # ==========================================
@@ -349,12 +351,13 @@ async def tarot_selection_handler(callback: CallbackQuery, state: FSMContext, db
         # 1. Проверка лимита
         if predicts.get("last_tarot_intro_date") == today:
             await callback.answer("⏳ Вы уже знакомились с колодой сегодня. Приходите завтра!", show_alert=True)
+            logger.info(f"Знакомство с колодой отклонено дневным лимитом: user_id={user_id}.")
             return
 
+        await callback.answer()
         # 2. Проверка баланса
         price = await check_balance_and_get_price(user_id, price_key, db_pool, bot, callback.message.chat.id)
         if price == -1:
-            await callback.answer()
             return
 
         # 3. Запуск с фиксированным вопросом
@@ -364,15 +367,15 @@ async def tarot_selection_handler(callback: CallbackQuery, state: FSMContext, db
             "и как нам лучше всего взаимодействовать (3 карта)."
         )
 
-        await process_tarot_reading(
+        is_success = await process_tarot_reading(
             user_id, callback.message.chat.id,
             layout_type, layout_name, cards_count,
             fixed_question, price, db_pool, bot
         )
 
         # 4. Обновляем дату intro И общую дату активности
-        await predict_repo.update_predicts(user_id, last_tarot_intro_date=today, last_tarot_date=today)
-        await callback.answer()
+        if is_success:
+            await predict_repo.update_predicts(user_id, last_tarot_intro_date=today, last_tarot_date=today)
         return
 
     # ==========================================
@@ -380,6 +383,7 @@ async def tarot_selection_handler(callback: CallbackQuery, state: FSMContext, db
     # ==========================================
     # Проверяем, есть ли информация о раскладе в файле с описаниями
     layout_info = TAROT_LAYOUTS_INFO.get(layout_type)
+    await callback.answer()
     if layout_info:
         # Получаем цену расклада из настроек
         settings_repo = SettingsRepo(db_pool)
@@ -426,7 +430,6 @@ async def tarot_selection_handler(callback: CallbackQuery, state: FSMContext, db
         # Если информации об этом раскладе нет в TAROT_LAYOUTS_INFO, используем старую логику
         price = await check_balance_and_get_price(user_id, price_key, db_pool, bot, callback.message.chat.id)
         if price == -1:
-            await callback.answer()
             return
 
         # Сохраняем данные в FSM и просим вопрос
@@ -445,7 +448,6 @@ async def tarot_selection_handler(callback: CallbackQuery, state: FSMContext, db
             "Нажмите кнопку ниже, чтобы сформулировать свой вопрос к картам.",
             reply_markup=get_tarot_request_keyboard()
         )
-    await callback.answer()
 
 
 # --- 3. Нажатие "Ввести запрос" (Шаг 3) ---
@@ -538,7 +540,7 @@ async def back_to_main_menu_handler(callback: CallbackQuery, state: FSMContext, 
 
 
 # --- 4. ЯДРО ЛОГИКИ РАСКЛАДА ---
-async def process_tarot_reading(
+async def _deliver_tarot_reading(
         user_id: int, chat_id: int,
         layout_type: str, layout_name: str, count: int,
         question: str, price: int,
@@ -554,9 +556,6 @@ async def process_tarot_reading(
 
     # await send_text(bot, chat_id, "🃏 Раскладываю карты... (Это может занять около минуты)", reply_markup=main_kb)
 
-    # Вместо текстового сообщения "Раскладываю карты..." отправляем ГИФКУ
-    loading_msg = await send_loading_animation(bot, chat_id, "gifs_tarot", db_pool)
-
     user = await user_repo.get_user(user_id)
     deck_key = user.get("choice_tarot", "tarot_classic")
 
@@ -565,7 +564,7 @@ async def process_tarot_reading(
     if not cards:
         await send_text(bot, chat_id,
                         f"❌ Ошибка: не удалось загрузить карты из колоды '{deck_key}'. Обратитесь к админу.")
-        return
+        return False
 
     # 2. Подготовка информации для ИИ (БЕЗ отправки фото)
     cards_info_for_llm = []
@@ -619,17 +618,13 @@ async def process_tarot_reading(
     sys_prompt = get_system_prompt(PERSONAS[persona_key]["prompt"])
     user_prompt = make_tarot_prompt(layout_name, question, cards_info_for_llm)
 
-    response = await llm_service.generate_response(user_prompt, sys_prompt)
-
-    # 3. УДАЛЯЕМ ГИФКУ
-    if loading_msg:
-        await delete_message(bot, chat_id, loading_msg.message_id)
+    response = await LLMService(db_pool).generate_response(user_prompt, sys_prompt)
 
     # Если LLM упала — выходим, НЕ отправляем карты, НЕ списываем деньги
     if not response:
         await send_text(bot, chat_id,
-                        "❌ Не удалось получить толкование от нейросети. Попробуйте позже (карма не списана).")
-        return
+                        "❌ Не удалось получить толкование за отведённое время. Попробуйте позже — карма не списана, дневной лимит не использован.")
+        return False
 
         # 4. Успех! Теперь отправляем карты
     media_group = []
@@ -674,10 +669,48 @@ async def process_tarot_reading(
     sent_msg = await send_text(bot, chat_id, response, reply_markup=main_kb)
     if not sent_msg:
         logger.error(f"Не удалось отправить толкование Таро пользователю {user_id}, списание отменено.")
-        return
+        return False
 
     # 7. Списываем карму (ТОЛЬКО СЕЙЧАС)
     if price > 0:
         new_karma = await payment_repo.apply_karma_transaction(user_id, layout_type, -price)
         if new_karma is None:
             logger.warning(f"Списание кармы за расклад не выполнено для пользователя {user_id}.")
+    return True
+
+
+async def process_tarot_reading(
+        user_id: int, chat_id: int,
+        layout_type: str, layout_name: str, count: int,
+        question: str, price: int,
+        db_pool: asyncpg.Pool, bot: Bot
+) -> bool:
+    """Runs one tarot generation per user and guarantees cleanup of the loading indicator."""
+    lock = _tarot_generation_locks.setdefault(user_id, asyncio.Lock())
+    if lock.locked():
+        await send_text(bot, chat_id, "⏳ Ваш предыдущий расклад ещё готовится. Пожалуйста, подождите.")
+        logger.info(f"Повторный запуск расклада отклонён: user_id={user_id}, layout={layout_type}.")
+        return False
+
+    async with lock:
+        logger.info(f"Запуск расклада: user_id={user_id}, layout={layout_type}, cards={count}.")
+        loading_msg = await send_loading_animation(bot, chat_id, "gifs_tarot", db_pool)
+        try:
+            success = await _deliver_tarot_reading(
+                user_id, chat_id, layout_type, layout_name, count, question, price, db_pool, bot
+            )
+            logger.info(
+                f"Расклад завершён: user_id={user_id}, layout={layout_type}, success={success}."
+            )
+            return success
+        except Exception:
+            logger.exception(f"Непредвиденная ошибка расклада: user_id={user_id}, layout={layout_type}.")
+            await send_text(
+                bot,
+                chat_id,
+                "❌ Не удалось подготовить расклад. Попробуйте позже — карма не списана, дневной лимит не использован.",
+            )
+            return False
+        finally:
+            if loading_msg:
+                await delete_message(bot, chat_id, loading_msg.message_id)

@@ -1,5 +1,6 @@
 # db/settings.py
 import asyncpg
+import json
 from typing import Dict, Tuple, Optional
 
 # Настройки по умолчанию (можно вынести в config, но тут тоже удобно)
@@ -21,8 +22,16 @@ DEFAULT_SETTINGS = {
     "price_karma_500": ("40", "Цена пакета 500 Кармы (RUB)"),
     "price_karma_1000": ("70", "Цена пакета 1000 Кармы (RUB)"),
     "karma_welcome_bonus": ("50", "Приветственный бонус"),
+    "karma_subscription_purchase_bonus": ("100", "Бонус за покупку подписки"),
     "karma_subscription_daily_bonus": ("50", "Ежедневный бонус по подписке"),
     "karma_channel_bonus": ("1", "Бонус за подписку на канал"),
+    "llm_openrouter_models": (json.dumps(["meta-llama/llama-4-maverick", "meta-llama/llama-4-scout", "qwen/qwen-2.5-72b-instruct"]), "Модели OpenRouter"),
+    "llm_priority": (json.dumps([
+        {"provider": "openrouter", "model": "meta-llama/llama-4-maverick"},
+        {"provider": "openrouter", "model": "meta-llama/llama-4-scout"},
+        {"provider": "openrouter", "model": "qwen/qwen-2.5-72b-instruct"},
+        None, None, None, None, None, None, None,
+    ]), "Приоритет LLM"),
 }
 
 class SettingsRepo:

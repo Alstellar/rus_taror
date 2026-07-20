@@ -4,6 +4,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from utils.card_mapping import TAROT_DECK_MAPPING
 from utils.personas import PERSONAS
 from db import SettingsRepo  # Для цен, если используется внутри функций
+from config import PUBLIC_OFFER_URL
 
 
 # --- Общие кнопки ---
@@ -17,6 +18,13 @@ def btn_back_profile() -> InlineKeyboardButton:
 
 def btn_back_to_main_menu() -> InlineKeyboardButton:
     return InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_main_menu")
+
+
+def get_offer_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📜 Открыть оферту", url=PUBLIC_OFFER_URL)],
+        [btn_home()]
+    ])
 
 
 def get_tarot_intro_keyboard() -> InlineKeyboardMarkup:
@@ -152,6 +160,7 @@ def get_marketplace_keyboard(prices: dict) -> InlineKeyboardMarkup:
 def get_payment_link_keyboard(url: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="💳 Перейти к оплате", url=url)],
+        [InlineKeyboardButton(text="📜 Публичная оферта", url=PUBLIC_OFFER_URL)],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="marketplace_menu")]
     ])
 
@@ -161,10 +170,53 @@ def get_admin_main_keyboard() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.button(text="✉️ Рассылка одному", callback_data="admin_mail_one")
     kb.button(text="📢 Рассылка всем", callback_data="admin_mail_all")
+    kb.button(text="🧠 Настройки LLM", callback_data="admin_llm")
 
     kb.adjust(1)  # Вертикально
     kb.row(btn_home())
     return kb.as_markup()
+
+
+def get_llm_main_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔌 OpenRouter", callback_data="llm_provider_openrouter")],
+        [InlineKeyboardButton(text="🔌 ClaudeHub", callback_data="llm_provider_claudehub")],
+        [InlineKeyboardButton(text="↕️ Приоритет", callback_data="llm_priority")],
+        [InlineKeyboardButton(text="🔙 В админку", callback_data="llm_admin_back")],
+    ])
+
+
+def get_llm_provider_keyboard(provider: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="💳 Проверка баланса", callback_data=f"llm_balance_{provider}")],
+        [InlineKeyboardButton(text="🤖 Модели", callback_data=f"llm_models_{provider}")],
+        [InlineKeyboardButton(text="🔙 Настройки LLM", callback_data="admin_llm")],
+    ])
+
+
+def get_llm_priority_keyboard(priority: list[dict | None]) -> InlineKeyboardMarkup:
+    rows = []
+    for index, item in enumerate(priority, 1):
+        label = "не задано" if not item else f"{item['provider'].title()} — {item['model']}"
+        rows.append([InlineKeyboardButton(text=f"{index}. {label}", callback_data=f"llm_priority_slot_{index - 1}")])
+    rows.append([InlineKeyboardButton(text="🔙 Настройки LLM", callback_data="admin_llm")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def get_llm_provider_choice_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="OpenRouter", callback_data="llm_priority_provider_openrouter")],
+        [InlineKeyboardButton(text="ClaudeHub", callback_data="llm_priority_provider_claudehub")],
+        [InlineKeyboardButton(text="🔙 Приоритет", callback_data="llm_priority")],
+    ])
+
+
+def get_llm_models_keyboard(models: list[str], prefix: str, back_callback: str, extra: bool = False) -> InlineKeyboardMarkup:
+    rows = [[InlineKeyboardButton(text=model, callback_data=f"{prefix}_{index}")] for index, model in enumerate(models[:50])]
+    if extra:
+        rows.append([InlineKeyboardButton(text="➕ Добавить модель", callback_data="llm_add_openrouter")])
+    rows.append([InlineKeyboardButton(text="🔙 Назад", callback_data=back_callback)])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def get_confirm_broadcast_keyboard() -> InlineKeyboardMarkup:
